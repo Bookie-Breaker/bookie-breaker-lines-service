@@ -5,10 +5,12 @@ Ingests and serves betting lines from external APIs (The Odds API, SharpAPI) wit
 ## Quickstart
 
 ### With Docker Compose (recommended)
-task up  # from BookieBreaker/ root
+
+task up # from BookieBreaker/ root
 
 ### Standalone
-cp .env.example .env  # fill in values
+
+cp .env.example .env # fill in values
 task bootstrap
 task dev
 
