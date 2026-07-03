@@ -18,7 +18,7 @@ func main() {
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		databaseURL = "pgx5://bookiebreaker:localdev@localhost:5432/bookiebreaker?search_path=lines"
+		databaseURL = "pgx5://bookiebreaker:localdev@localhost:5432/bookiebreaker?search_path=lines,public"
 	}
 
 	m, err := migrate.New("file://migrations", databaseURL)

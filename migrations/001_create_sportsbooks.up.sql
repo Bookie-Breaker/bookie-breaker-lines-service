@@ -1,4 +1,4 @@
-SET search_path TO lines;
+SET search_path TO lines, public;
 
 CREATE TABLE lines.sportsbooks (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

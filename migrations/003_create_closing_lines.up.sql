@@ -1,11 +1,11 @@
-SET search_path TO lines;
+SET search_path TO lines, public;
 
 CREATE TABLE lines.closing_lines (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     game_external_id TEXT NOT NULL,
     sportsbook_id    UUID NOT NULL REFERENCES lines.sportsbooks(id),
-    league           league_enum NOT NULL,
-    market_type      market_type_enum NOT NULL,
+    league           public.league_enum NOT NULL,
+    market_type      public.market_type_enum NOT NULL,
     selection        TEXT NOT NULL,
     line_value       DECIMAL(8,2),
     odds_american    INTEGER NOT NULL,

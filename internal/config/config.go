@@ -20,7 +20,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Port:                 getEnvInt("PORT", 8001),
-		DatabaseURL:          getEnv("DATABASE_URL", "postgres://bookiebreaker:localdev@localhost:5432/bookiebreaker?search_path=lines"),
+		DatabaseURL:          getEnv("DATABASE_URL", "postgres://bookiebreaker:localdev@localhost:5432/bookiebreaker?search_path=lines,public"),
 		RedisURL:             getEnv("REDIS_URL", "redis://localhost:6379"),
 		OddsAPIKey:           getEnv("ODDS_API_KEY", ""),
 		OddsAPIPollInterval:  time.Duration(getEnvInt("ODDS_API_POLL_INTERVAL", 300)) * time.Second,
