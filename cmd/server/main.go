@@ -9,10 +9,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/adapter/oddsapi"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/cache"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/config"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/database"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/pubsub"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/repository/postgres"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/server"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/service"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/telemetry"
 )
 
@@ -44,7 +48,35 @@ func main() {
 	}
 	defer func() { _ = rdb.Close() }()
 
-	e := server.New(db, rdb)
+	lineRepo := postgres.NewLineRepo(db)
+	gameRepo := postgres.NewGameRepo(db)
+	sbRepo := postgres.NewSportsbookRepo(db)
+	rawRepo := postgres.NewRawResponseRepo(db)
+	lineCache := cache.NewLineCache(rdb)
+	publisher := pubsub.NewPublisher(rdb)
+
+	oddsClient := oddsapi.NewClient(cfg.OddsAPIKey, "")
+	ingestion := service.NewIngestionService(oddsClient, lineRepo, gameRepo, sbRepo, rawRepo, lineCache, publisher)
+	closing := service.NewClosingLineService(lineRepo, gameRepo)
+	query := service.NewLineQueryService(lineRepo, gameRepo, sbRepo, lineCache)
+
+	ingestionEnabled := cfg.OddsAPIKey != ""
+	if ingestionEnabled {
+		scheduler := service.NewScheduler(ingestion, closing, cfg.OddsAPIPollInterval, cfg.OddsAPISports)
+		go scheduler.Start(ctx)
+	} else {
+		slog.Warn("ODDS_API_KEY not set; ingestion scheduler disabled, read API only")
+	}
+
+	e := server.New(server.Deps{
+		DB:               db,
+		Redis:            rdb,
+		Query:            query,
+		Ingestion:        ingestion,
+		SportsbookRepo:   sbRepo,
+		SportKeys:        cfg.OddsAPISports,
+		IngestionEnabled: ingestionEnabled,
+	})
 
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.Port)
@@ -58,6 +90,7 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down gracefully")
+	cancel() // stop the ingestion scheduler before the HTTP server drains
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
