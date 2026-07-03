@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -23,6 +24,7 @@ type IngestionResult struct {
 	League        string `json:"league"`
 	GamesFound    int    `json:"games_found"`
 	LinesIngested int    `json:"lines_ingested"`
+	LinesSkipped  int    `json:"lines_skipped"`
 	DurationMs    int64  `json:"duration_ms"`
 }
 
@@ -30,16 +32,22 @@ type IngestionResult struct {
 type IngestionService struct {
 	client    *oddsapi.Client
 	lineRepo  repository.LineRepository
+	gameRepo  repository.GameRepository
 	sbRepo    repository.SportsbookRepository
 	rawRepo   repository.RawResponseRepository
 	lineCache *cache.LineCache
 	publisher *pubsub.Publisher
+
+	// mu serializes ingestion cycles so a manual trigger and a scheduler
+	// tick cannot interleave their dedup reads and inserts.
+	mu sync.Mutex
 }
 
 // NewIngestionService creates a new ingestion service.
 func NewIngestionService(
 	client *oddsapi.Client,
 	lineRepo repository.LineRepository,
+	gameRepo repository.GameRepository,
 	sbRepo repository.SportsbookRepository,
 	rawRepo repository.RawResponseRepository,
 	lineCache *cache.LineCache,
@@ -48,6 +56,7 @@ func NewIngestionService(
 	return &IngestionService{
 		client:    client,
 		lineRepo:  lineRepo,
+		gameRepo:  gameRepo,
 		sbRepo:    sbRepo,
 		rawRepo:   rawRepo,
 		lineCache: lineCache,
@@ -57,6 +66,9 @@ func NewIngestionService(
 
 // Ingest fetches and processes lines for a sport from The Odds API.
 func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*IngestionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	ctx, span := ingestionTracer.Start(ctx, "ingestion.Ingest")
 	defer span.End()
 	span.SetAttributes(attribute.String("sport_key", sportKey))
@@ -100,6 +112,12 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 	// Normalize
 	normalized := oddsapi.Normalize(result.Events, sbMap, time.Now().UTC())
 
+	// Record game metadata (commence time, teams) for side derivation,
+	// date filtering, and the closing-line sweep.
+	if err := s.gameRepo.UpsertGames(ctx, normalized.Games); err != nil {
+		return nil, fmt.Errorf("upsert games: %w", err)
+	}
+
 	if len(normalized.Snapshots) == 0 {
 		slog.Info("no lines to ingest", "sport", sportKey)
 		return &IngestionResult{
@@ -109,14 +127,33 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 		}, nil
 	}
 
+	// Skip snapshots whose values match the latest persisted row
+	allGameIDs := uniqueGameIDs(normalized.Snapshots)
+	latest, err := s.lineRepo.GetLatestLineValues(ctx, allGameIDs)
+	if err != nil {
+		return nil, fmt.Errorf("fetch latest line values: %w", err)
+	}
+	changed := FilterChanged(latest, normalized.Snapshots)
+	skipped := len(normalized.Snapshots) - len(changed)
+
+	if len(changed) == 0 {
+		slog.Info("no line changes detected", "sport", sportKey, "lines_skipped", skipped)
+		return &IngestionResult{
+			League:       sportKey,
+			GamesFound:   normalized.GameCount,
+			LinesSkipped: skipped,
+			DurationMs:   time.Since(start).Milliseconds(),
+		}, nil
+	}
+
 	// Persist
-	inserted, err := s.lineRepo.InsertLineSnapshots(ctx, normalized.Snapshots)
+	inserted, err := s.lineRepo.InsertLineSnapshots(ctx, changed)
 	if err != nil {
 		return nil, fmt.Errorf("insert line snapshots: %w", err)
 	}
 
 	// Invalidate cache for affected games
-	gameIDs := uniqueGameIDs(normalized.Snapshots)
+	gameIDs := uniqueGameIDs(changed)
 	for _, gid := range gameIDs {
 		if cacheErr := s.lineCache.InvalidateGame(ctx, gid); cacheErr != nil {
 			slog.Warn("failed to invalidate cache", "game_id", gid, "error", cacheErr)
@@ -125,14 +162,14 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 
 	// Publish event
 	league := ""
-	if len(normalized.Snapshots) > 0 {
-		league = string(normalized.Snapshots[0].League)
+	if len(changed) > 0 {
+		league = string(changed[0].League)
 	}
 	if pubErr := s.publisher.PublishLinesUpdated(ctx, pubsub.LinesUpdatedEvent{
 		League:             league,
 		GameIDs:            gameIDs,
-		MarketTypes:        uniqueMarketTypes(normalized.Snapshots),
-		SportsbooksUpdated: uniqueSportsbooks(normalized.Snapshots, sbMap),
+		MarketTypes:        uniqueMarketTypes(changed),
+		SportsbooksUpdated: uniqueSportsbooks(changed, sbMap),
 		ChangeCount:        inserted,
 		Source:             "the_odds_api",
 	}); pubErr != nil {
@@ -144,11 +181,13 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 		"sport", sportKey,
 		"games", normalized.GameCount,
 		"lines_inserted", inserted,
+		"lines_skipped", skipped,
 		"duration_ms", duration.Milliseconds(),
 	)
 
 	span.SetAttributes(
 		attribute.Int("lines.inserted", inserted),
+		attribute.Int("lines.skipped", skipped),
 		attribute.Int("games.count", normalized.GameCount),
 	)
 
@@ -156,6 +195,7 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 		League:        sportKey,
 		GamesFound:    normalized.GameCount,
 		LinesIngested: inserted,
+		LinesSkipped:  skipped,
 		DurationMs:    duration.Milliseconds(),
 	}, nil
 }

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -50,6 +51,66 @@ func (r *LineRepo) InsertLineSnapshots(ctx context.Context, snapshots []model.Li
 	}
 
 	return inserted, nil
+}
+
+// GetLatestLineValues returns the value-bearing fields of the most recent
+// snapshot per (game, sportsbook, market, selection) for the given games,
+// used by ingestion to skip persisting unchanged lines.
+func (r *LineRepo) GetLatestLineValues(ctx context.Context, gameIDs []string) (map[repository.LineKey]repository.LineValues, error) {
+	latest := make(map[repository.LineKey]repository.LineValues)
+	if len(gameIDs) == 0 {
+		return latest, nil
+	}
+
+	rows, err := r.db.Query(ctx,
+		`SELECT DISTINCT ON (game_external_id, sportsbook_id, market_type, selection)
+			game_external_id, sportsbook_id, market_type, selection, line_value, odds_american, is_live
+		FROM lines.line_snapshots
+		WHERE game_external_id = ANY($1)
+		ORDER BY game_external_id, sportsbook_id, market_type, selection, captured_at DESC`,
+		gameIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query latest line values: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var k repository.LineKey
+		var v repository.LineValues
+		if err := rows.Scan(&k.GameExternalID, &k.SportsbookID, &k.MarketType, &k.Selection,
+			&v.LineValue, &v.OddsAmerican, &v.IsLive); err != nil {
+			return nil, fmt.Errorf("scan latest line values: %w", err)
+		}
+		latest[k] = v
+	}
+
+	return latest, rows.Err()
+}
+
+// CaptureClosingLines materializes the latest pre-commence snapshot per
+// (sportsbook, market, selection) into lines.closing_lines. Idempotent:
+// re-running updates existing rows, which self-corrects postponed games.
+func (r *LineRepo) CaptureClosingLines(ctx context.Context, gameExternalID string, commenceTime time.Time) (int, error) {
+	ct, err := r.db.Exec(ctx,
+		`INSERT INTO lines.closing_lines
+			(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at)
+		SELECT DISTINCT ON (game_external_id, sportsbook_id, market_type, selection)
+			game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at
+		FROM lines.line_snapshots
+		WHERE game_external_id = $1 AND captured_at <= $2
+		ORDER BY game_external_id, sportsbook_id, market_type, selection, captured_at DESC
+		ON CONFLICT ON CONSTRAINT uq_closing_lines_composite DO UPDATE SET
+			line_value = EXCLUDED.line_value,
+			odds_american = EXCLUDED.odds_american,
+			odds_decimal = EXCLUDED.odds_decimal,
+			captured_at = EXCLUDED.captured_at`,
+		gameExternalID, commenceTime,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("capture closing lines for %q: %w", gameExternalID, err)
+	}
+	return int(ct.RowsAffected()), nil
 }
 
 func (r *LineRepo) GetCurrentLines(ctx context.Context, filters repository.CurrentLineFilters) ([]model.LineSnapshot, bool, error) {
