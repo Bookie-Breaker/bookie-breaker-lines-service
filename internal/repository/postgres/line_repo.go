@@ -118,12 +118,15 @@ func (r *LineRepo) GetCurrentLines(ctx context.Context, filters repository.Curre
 }
 
 func (r *LineRepo) GetGameLines(ctx context.Context, gameID string, filters repository.CurrentLineFilters) ([]model.LineSnapshot, bool, error) {
-	filters.GameID = gameID
+	filters.GameIDs = []string{gameID}
 	return r.queryLines(ctx, "", filters)
 }
 
 func (r *LineRepo) queryLines(ctx context.Context, _ string, filters repository.CurrentLineFilters) ([]model.LineSnapshot, bool, error) {
-	query := `SELECT DISTINCT ON (ls.game_external_id, ls.sportsbook_id, ls.market_type, ls.selection)
+	// Text casts in DISTINCT ON / ORDER BY keep the sort order consistent
+	// with the keyset cursor's row-value comparison (enum ordering follows
+	// declaration order, not lexicographic order).
+	query := `SELECT DISTINCT ON (ls.game_external_id, ls.sportsbook_id::text, ls.market_type::text, ls.selection)
 		ls.id, ls.game_external_id, ls.sportsbook_id, sb.key, ls.league, ls.market_type,
 		ls.selection, ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
 		FROM lines.line_snapshots ls
@@ -134,32 +137,49 @@ func (r *LineRepo) queryLines(ctx context.Context, _ string, filters repository.
 	argIdx := 1
 	var conditions []string
 
-	if filters.GameID != "" {
-		conditions = append(conditions, fmt.Sprintf(`ls.game_external_id = $%d`, argIdx))
-		args = append(args, filters.GameID)
+	if len(filters.GameIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`ls.game_external_id = ANY($%d)`, argIdx))
+		args = append(args, filters.GameIDs)
 		argIdx++
 	}
-	if filters.League != "" {
-		conditions = append(conditions, fmt.Sprintf(`ls.league = $%d`, argIdx))
-		args = append(args, filters.League)
+	if len(filters.Leagues) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`ls.league::text = ANY($%d)`, argIdx))
+		args = append(args, filters.Leagues)
 		argIdx++
 	}
-	if filters.Sportsbook != "" {
-		conditions = append(conditions, fmt.Sprintf(`sb.key = $%d`, argIdx))
-		args = append(args, filters.Sportsbook)
+	if len(filters.Sportsbooks) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`sb.key = ANY($%d)`, argIdx))
+		args = append(args, filters.Sportsbooks)
 		argIdx++
 	}
-	if filters.MarketType != "" {
-		conditions = append(conditions, fmt.Sprintf(`ls.market_type = $%d`, argIdx))
-		args = append(args, filters.MarketType)
+	if len(filters.MarketTypes) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`ls.market_type::text = ANY($%d)`, argIdx))
+		args = append(args, filters.MarketTypes)
 		argIdx++
+	}
+	if filters.Date != "" {
+		conditions = append(conditions, fmt.Sprintf(
+			`ls.game_external_id IN (SELECT game_external_id FROM lines.games WHERE commence_time::date = $%d::date)`, argIdx))
+		args = append(args, filters.Date)
+		argIdx++
+	}
+	if filters.Cursor != "" {
+		key, err := repository.DecodeCursor(filters.Cursor)
+		if err != nil {
+			return nil, false, err
+		}
+		conditions = append(conditions, fmt.Sprintf(
+			`(ls.game_external_id, ls.sportsbook_id::text, ls.market_type::text, ls.selection) > ($%d, $%d, $%d, $%d)`,
+			argIdx, argIdx+1, argIdx+2, argIdx+3))
+		args = append(args, key.GameExternalID, key.SportsbookID, string(key.MarketType), key.Selection)
+		argIdx += 4
 	}
 
 	for _, c := range conditions {
 		query += " AND " + c
 	}
 
-	query += ` ORDER BY ls.game_external_id, ls.sportsbook_id, ls.market_type, ls.selection, ls.captured_at DESC`
+	query += ` ORDER BY ls.game_external_id, ls.sportsbook_id::text, ls.market_type::text, ls.selection, ls.captured_at DESC`
 
 	limit := filters.Limit
 	if limit <= 0 {

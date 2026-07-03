@@ -10,9 +10,22 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/handler"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/repository"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/service"
 )
 
-func New(db *pgxpool.Pool, rdb *redis.Client) *echo.Echo {
+// Deps holds the constructed dependencies the HTTP layer needs.
+type Deps struct {
+	DB               *pgxpool.Pool
+	Redis            *redis.Client
+	Query            *service.LineQueryService
+	Ingestion        *service.IngestionService
+	SportsbookRepo   repository.SportsbookRepository
+	SportKeys        []string
+	IngestionEnabled bool
+}
+
+func New(deps Deps) *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 
@@ -44,7 +57,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client) *echo.Echo {
 		},
 	}))
 
-	registerRoutes(e, db, rdb)
+	registerRoutes(e, deps)
 
 	return e
 }

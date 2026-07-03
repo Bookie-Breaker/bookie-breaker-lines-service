@@ -8,13 +8,13 @@ import (
 )
 
 type CurrentLineFilters struct {
-	League     string
-	GameID     string
-	Sportsbook string
-	MarketType string
-	Date       string
-	Limit      int
-	Cursor     string
+	Leagues     []string
+	GameIDs     []string
+	Sportsbooks []string
+	MarketTypes []string
+	Date        string
+	Limit       int
+	Cursor      string
 }
 
 type MovementFilters struct {
