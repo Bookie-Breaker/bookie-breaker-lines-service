@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -53,8 +54,8 @@ func (c *Client) GetOdds(ctx context.Context, sport string, markets []string) (*
 	span.SetAttributes(attribute.String("sport", sport))
 
 	url := fmt.Sprintf("%s/v4/sports/%s/odds?apiKey=%s&regions=us&oddsFormat=decimal", c.baseURL, sport, c.apiKey)
-	for _, m := range markets {
-		url += "&markets=" + m
+	if len(markets) > 0 {
+		url += "&markets=" + strings.Join(markets, ",")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
