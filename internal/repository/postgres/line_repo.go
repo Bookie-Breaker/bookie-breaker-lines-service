@@ -25,10 +25,12 @@ func (r *LineRepo) InsertLineSnapshots(ctx context.Context, snapshots []model.Li
 		return 0, nil
 	}
 
+	// Conflict target lists the columns of the uq_line_snapshots_composite
+	// unique index; ON CONFLICT ON CONSTRAINT does not work with indexes.
 	query := `INSERT INTO lines.line_snapshots
 		(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, is_live, captured_at, source)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		ON CONFLICT ON CONSTRAINT uq_line_snapshots_composite DO NOTHING`
+		ON CONFLICT (game_external_id, sportsbook_id, market_type, selection, captured_at) DO NOTHING`
 
 	batch := &pgx.Batch{}
 	for _, s := range snapshots {
