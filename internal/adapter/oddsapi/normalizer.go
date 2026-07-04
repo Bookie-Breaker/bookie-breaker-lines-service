@@ -52,6 +52,7 @@ func ImpliedProbability(decimal float64) float64 {
 // NormalizeResult holds the normalized snapshots from a single API response.
 type NormalizeResult struct {
 	Snapshots []model.LineSnapshot
+	Games     []model.Game
 	GameCount int
 }
 
@@ -59,12 +60,21 @@ type NormalizeResult struct {
 // sportsbookIDs maps sportsbook key -> UUID string.
 func Normalize(events OddsResponse, sportsbookIDs map[string]string, capturedAt time.Time) NormalizeResult {
 	var snapshots []model.LineSnapshot
+	var games []model.Game
 
 	for _, event := range events {
 		league, ok := SportKeyToLeague[event.SportKey]
 		if !ok {
 			continue
 		}
+
+		games = append(games, model.Game{
+			GameExternalID: event.ID,
+			League:         league,
+			HomeTeam:       event.HomeTeam,
+			AwayTeam:       event.AwayTeam,
+			CommenceTime:   event.CommenceTime,
+		})
 
 		for _, bm := range event.Bookmakers {
 			sbID, ok := sportsbookIDs[bm.Key]
@@ -105,6 +115,7 @@ func Normalize(events OddsResponse, sportsbookIDs map[string]string, capturedAt 
 
 	return NormalizeResult{
 		Snapshots: snapshots,
+		Games:     games,
 		GameCount: len(events),
 	}
 }

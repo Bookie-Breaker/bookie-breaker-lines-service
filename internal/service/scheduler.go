@@ -9,14 +9,16 @@ import (
 // Scheduler runs ingestion cycles on a configurable interval.
 type Scheduler struct {
 	ingestion *IngestionService
+	closing   *ClosingLineService
 	interval  time.Duration
 	sportKeys []string
 }
 
 // NewScheduler creates a new polling scheduler.
-func NewScheduler(ingestion *IngestionService, interval time.Duration, sportKeys []string) *Scheduler {
+func NewScheduler(ingestion *IngestionService, closing *ClosingLineService, interval time.Duration, sportKeys []string) *Scheduler {
 	return &Scheduler{
 		ingestion: ingestion,
+		closing:   closing,
 		interval:  interval,
 		sportKeys: sportKeys,
 	}
@@ -54,5 +56,9 @@ func (s *Scheduler) runCycle(ctx context.Context) {
 		if _, err := s.ingestion.Ingest(ctx, sport); err != nil {
 			slog.Error("ingestion cycle failed", "sport", sport, "error", err)
 		}
+	}
+
+	if ctx.Err() == nil {
+		s.closing.CaptureDue(ctx)
 	}
 }

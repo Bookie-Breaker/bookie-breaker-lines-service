@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,10 +25,12 @@ func (r *LineRepo) InsertLineSnapshots(ctx context.Context, snapshots []model.Li
 		return 0, nil
 	}
 
+	// Conflict target lists the columns of the uq_line_snapshots_composite
+	// unique index; ON CONFLICT ON CONSTRAINT does not work with indexes.
 	query := `INSERT INTO lines.line_snapshots
 		(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, is_live, captured_at, source)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		ON CONFLICT ON CONSTRAINT uq_line_snapshots_composite DO NOTHING`
+		ON CONFLICT (game_external_id, sportsbook_id, market_type, selection, captured_at) DO NOTHING`
 
 	batch := &pgx.Batch{}
 	for _, s := range snapshots {
@@ -52,17 +55,80 @@ func (r *LineRepo) InsertLineSnapshots(ctx context.Context, snapshots []model.Li
 	return inserted, nil
 }
 
+// GetLatestLineValues returns the value-bearing fields of the most recent
+// snapshot per (game, sportsbook, market, selection) for the given games,
+// used by ingestion to skip persisting unchanged lines.
+func (r *LineRepo) GetLatestLineValues(ctx context.Context, gameIDs []string) (map[repository.LineKey]repository.LineValues, error) {
+	latest := make(map[repository.LineKey]repository.LineValues)
+	if len(gameIDs) == 0 {
+		return latest, nil
+	}
+
+	rows, err := r.db.Query(ctx,
+		`SELECT DISTINCT ON (game_external_id, sportsbook_id, market_type, selection)
+			game_external_id, sportsbook_id, market_type, selection, line_value, odds_american, is_live
+		FROM lines.line_snapshots
+		WHERE game_external_id = ANY($1)
+		ORDER BY game_external_id, sportsbook_id, market_type, selection, captured_at DESC`,
+		gameIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query latest line values: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var k repository.LineKey
+		var v repository.LineValues
+		if err := rows.Scan(&k.GameExternalID, &k.SportsbookID, &k.MarketType, &k.Selection,
+			&v.LineValue, &v.OddsAmerican, &v.IsLive); err != nil {
+			return nil, fmt.Errorf("scan latest line values: %w", err)
+		}
+		latest[k] = v
+	}
+
+	return latest, rows.Err()
+}
+
+// CaptureClosingLines materializes the latest pre-commence snapshot per
+// (sportsbook, market, selection) into lines.closing_lines. Idempotent:
+// re-running updates existing rows, which self-corrects postponed games.
+func (r *LineRepo) CaptureClosingLines(ctx context.Context, gameExternalID string, commenceTime time.Time) (int, error) {
+	ct, err := r.db.Exec(ctx,
+		`INSERT INTO lines.closing_lines
+			(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at)
+		SELECT DISTINCT ON (game_external_id, sportsbook_id, market_type, selection)
+			game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at
+		FROM lines.line_snapshots
+		WHERE game_external_id = $1 AND captured_at <= $2
+		ORDER BY game_external_id, sportsbook_id, market_type, selection, captured_at DESC
+		ON CONFLICT ON CONSTRAINT uq_closing_lines_composite DO UPDATE SET
+			line_value = EXCLUDED.line_value,
+			odds_american = EXCLUDED.odds_american,
+			odds_decimal = EXCLUDED.odds_decimal,
+			captured_at = EXCLUDED.captured_at`,
+		gameExternalID, commenceTime,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("capture closing lines for %q: %w", gameExternalID, err)
+	}
+	return int(ct.RowsAffected()), nil
+}
+
 func (r *LineRepo) GetCurrentLines(ctx context.Context, filters repository.CurrentLineFilters) ([]model.LineSnapshot, bool, error) {
 	return r.queryLines(ctx, "", filters)
 }
 
 func (r *LineRepo) GetGameLines(ctx context.Context, gameID string, filters repository.CurrentLineFilters) ([]model.LineSnapshot, bool, error) {
-	filters.GameID = gameID
+	filters.GameIDs = []string{gameID}
 	return r.queryLines(ctx, "", filters)
 }
 
 func (r *LineRepo) queryLines(ctx context.Context, _ string, filters repository.CurrentLineFilters) ([]model.LineSnapshot, bool, error) {
-	query := `SELECT DISTINCT ON (ls.game_external_id, ls.sportsbook_id, ls.market_type, ls.selection)
+	// Text casts in DISTINCT ON / ORDER BY keep the sort order consistent
+	// with the keyset cursor's row-value comparison (enum ordering follows
+	// declaration order, not lexicographic order).
+	query := `SELECT DISTINCT ON (ls.game_external_id, ls.sportsbook_id::text, ls.market_type::text, ls.selection)
 		ls.id, ls.game_external_id, ls.sportsbook_id, sb.key, ls.league, ls.market_type,
 		ls.selection, ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
 		FROM lines.line_snapshots ls
@@ -73,32 +139,49 @@ func (r *LineRepo) queryLines(ctx context.Context, _ string, filters repository.
 	argIdx := 1
 	var conditions []string
 
-	if filters.GameID != "" {
-		conditions = append(conditions, fmt.Sprintf(`ls.game_external_id = $%d`, argIdx))
-		args = append(args, filters.GameID)
+	if len(filters.GameIDs) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`ls.game_external_id = ANY($%d)`, argIdx))
+		args = append(args, filters.GameIDs)
 		argIdx++
 	}
-	if filters.League != "" {
-		conditions = append(conditions, fmt.Sprintf(`ls.league = $%d`, argIdx))
-		args = append(args, filters.League)
+	if len(filters.Leagues) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`ls.league::text = ANY($%d)`, argIdx))
+		args = append(args, filters.Leagues)
 		argIdx++
 	}
-	if filters.Sportsbook != "" {
-		conditions = append(conditions, fmt.Sprintf(`sb.key = $%d`, argIdx))
-		args = append(args, filters.Sportsbook)
+	if len(filters.Sportsbooks) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`sb.key = ANY($%d)`, argIdx))
+		args = append(args, filters.Sportsbooks)
 		argIdx++
 	}
-	if filters.MarketType != "" {
-		conditions = append(conditions, fmt.Sprintf(`ls.market_type = $%d`, argIdx))
-		args = append(args, filters.MarketType)
+	if len(filters.MarketTypes) > 0 {
+		conditions = append(conditions, fmt.Sprintf(`ls.market_type::text = ANY($%d)`, argIdx))
+		args = append(args, filters.MarketTypes)
 		argIdx++
+	}
+	if filters.Date != "" {
+		conditions = append(conditions, fmt.Sprintf(
+			`ls.game_external_id IN (SELECT game_external_id FROM lines.games WHERE commence_time::date = $%d::date)`, argIdx))
+		args = append(args, filters.Date)
+		argIdx++
+	}
+	if filters.Cursor != "" {
+		key, err := repository.DecodeCursor(filters.Cursor)
+		if err != nil {
+			return nil, false, err
+		}
+		conditions = append(conditions, fmt.Sprintf(
+			`(ls.game_external_id, ls.sportsbook_id::text, ls.market_type::text, ls.selection) > ($%d, $%d, $%d, $%d)`,
+			argIdx, argIdx+1, argIdx+2, argIdx+3))
+		args = append(args, key.GameExternalID, key.SportsbookID, string(key.MarketType), key.Selection)
+		argIdx += 4
 	}
 
 	for _, c := range conditions {
 		query += " AND " + c
 	}
 
-	query += ` ORDER BY ls.game_external_id, ls.sportsbook_id, ls.market_type, ls.selection, ls.captured_at DESC`
+	query += ` ORDER BY ls.game_external_id, ls.sportsbook_id::text, ls.market_type::text, ls.selection, ls.captured_at DESC`
 
 	limit := filters.Limit
 	if limit <= 0 {

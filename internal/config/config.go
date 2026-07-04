@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,7 @@ type Config struct {
 	RedisURL             string
 	OddsAPIKey           string
 	OddsAPIPollInterval  time.Duration
+	OddsAPISports        []string
 	OTELExporterEndpoint string
 	OTELServiceName      string
 	LogLevel             string
@@ -24,6 +26,7 @@ func Load() *Config {
 		RedisURL:             getEnv("REDIS_URL", "redis://localhost:6379"),
 		OddsAPIKey:           getEnv("ODDS_API_KEY", ""),
 		OddsAPIPollInterval:  time.Duration(getEnvInt("ODDS_API_POLL_INTERVAL", 300)) * time.Second,
+		OddsAPISports:        getEnvList("ODDS_API_SPORTS", []string{"basketball_nba"}),
 		OTELExporterEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
 		OTELServiceName:      getEnv("OTEL_SERVICE_NAME", "lines-service"),
 		LogLevel:             getEnv("LOG_LEVEL", "info"),
@@ -44,4 +47,22 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func getEnvList(key string, fallback []string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }
