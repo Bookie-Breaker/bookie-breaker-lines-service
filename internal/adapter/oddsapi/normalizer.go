@@ -9,6 +9,7 @@ import (
 )
 
 // SportKeyToLeague maps The Odds API sport keys to our league enum.
+// NCAA_HKY has no Odds API key mapping: coverage is unverified (ADR-026 gate).
 var SportKeyToLeague = map[string]model.League{
 	"basketball_nba":         model.LeagueNBA,
 	"basketball_ncaab":       model.LeagueNCAACB,
@@ -16,6 +17,9 @@ var SportKeyToLeague = map[string]model.League{
 	"americanfootball_ncaaf": model.LeagueNCAAFB,
 	"baseball_mlb":           model.LeagueMLB,
 	"baseball_ncaa":          model.LeagueNCAACBB,
+	"soccer_fifa_world_cup":  model.LeagueFIFAWC,
+	"soccer_epl":             model.LeagueEPL,
+	"icehockey_nhl":          model.LeagueNHL,
 }
 
 // MarketKeyToType maps The Odds API market keys to our market type enum.

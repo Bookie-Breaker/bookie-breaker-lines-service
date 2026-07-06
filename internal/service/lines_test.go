@@ -240,6 +240,8 @@ func TestDeriveSide(t *testing.T) {
 		{model.MarketMoneyline, "Los Angeles Lakers", "HOME"},
 		{model.MarketMoneyline, "Boston Celtics", "AWAY"},
 		{model.MarketMoneyline, "Unknown Team", ""},
+		{model.MarketMoneyline, "Draw", "DRAW"},
+		{model.MarketSpread, "Draw", ""},
 	}
 
 	for _, tt := range tests {
