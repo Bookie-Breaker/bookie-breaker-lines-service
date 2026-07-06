@@ -168,6 +168,62 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+func TestNormalize_SoccerThreeWayMoneyline(t *testing.T) {
+	events := oddsapi.OddsResponse{
+		{
+			ID:           "wc-final-2026",
+			SportKey:     "soccer_fifa_world_cup",
+			HomeTeam:     "France",
+			AwayTeam:     "Brazil",
+			CommenceTime: time.Now().Add(24 * time.Hour),
+			Bookmakers: []oddsapi.Bookmaker{
+				{
+					Key:   "draftkings",
+					Title: "DraftKings",
+					Markets: []oddsapi.Market{
+						{
+							Key: "h2h",
+							Outcomes: []oddsapi.Outcome{
+								{Name: "France", Price: 2.50},
+								{Name: "Brazil", Price: 2.90},
+								{Name: "Draw", Price: 3.10},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := oddsapi.Normalize(events, map[string]string{"draftkings": "dk-uuid-123"}, time.Now())
+
+	if result.GameCount != 1 {
+		t.Errorf("expected 1 game, got %d", result.GameCount)
+	}
+	if len(result.Snapshots) != 3 {
+		t.Fatalf("expected 3 snapshots for three-way h2h, got %d", len(result.Snapshots))
+	}
+
+	selections := make(map[string]bool, 3)
+	for _, snap := range result.Snapshots {
+		selections[snap.Selection] = true
+		if snap.MarketType != model.MarketMoneyline {
+			t.Errorf("expected MONEYLINE, got %q", snap.MarketType)
+		}
+		if snap.League != model.LeagueFIFAWC {
+			t.Errorf("expected league FIFA_WC, got %q", snap.League)
+		}
+		if snap.LineValue != nil {
+			t.Error("moneyline should have nil line_value")
+		}
+	}
+	for _, want := range []string{"France", "Brazil", "Draw"} {
+		if !selections[want] {
+			t.Errorf("missing selection %q in %v", want, selections)
+		}
+	}
+}
+
 func TestNormalize_UnknownSportKey(t *testing.T) {
 	events := oddsapi.OddsResponse{
 		{

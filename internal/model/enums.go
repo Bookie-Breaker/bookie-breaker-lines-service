@@ -9,6 +9,10 @@ const (
 	LeagueNCAAFB  League = "NCAA_FB"
 	LeagueNCAACB  League = "NCAA_BB"
 	LeagueNCAACBB League = "NCAA_BSB"
+	LeagueFIFAWC  League = "FIFA_WC"
+	LeagueEPL     League = "EPL"
+	LeagueNHL     League = "NHL"
+	LeagueNCAAHKY League = "NCAA_HKY"
 )
 
 type MarketType string
@@ -30,4 +34,6 @@ const (
 	SportFootball   Sport = "FOOTBALL"
 	SportBasketball Sport = "BASKETBALL"
 	SportBaseball   Sport = "BASEBALL"
+	SportSoccer     Sport = "SOCCER"
+	SportHockey     Sport = "HOCKEY"
 )

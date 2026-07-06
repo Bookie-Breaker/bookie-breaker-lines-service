@@ -406,6 +406,10 @@ func deriveSide(snap model.LineSnapshot, game *model.Game) string {
 		}
 		return ""
 	case model.MarketSpread, model.MarketMoneyline:
+		// Three-way (soccer) moneylines carry a literal "Draw" outcome (ADR-027).
+		if snap.MarketType == model.MarketMoneyline && snap.Selection == "Draw" {
+			return "DRAW"
+		}
 		if game == nil {
 			return ""
 		}
@@ -423,7 +427,7 @@ func deriveSide(snap model.LineSnapshot, game *model.Game) string {
 
 func isSideKeyword(v string) bool {
 	switch strings.ToUpper(v) {
-	case "HOME", "AWAY", "OVER", "UNDER", "YES", "NO":
+	case "HOME", "AWAY", "DRAW", "OVER", "UNDER", "YES", "NO":
 		return true
 	}
 	return false
