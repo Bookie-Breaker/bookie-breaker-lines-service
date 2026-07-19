@@ -5,44 +5,53 @@ import (
 )
 
 type LineSnapshot struct {
-	ID             string     `json:"id"`
-	GameExternalID string     `json:"game_id"`
-	SportsbookID   string     `json:"sportsbook_id"`
-	SportsbookKey  string     `json:"sportsbook_key,omitempty"`
-	League         League     `json:"league,omitempty"`
-	MarketType     MarketType `json:"market_type"`
-	Selection      string     `json:"selection"`
-	Side           string     `json:"side,omitempty"`
-	LineValue      *float64   `json:"line_value"`
-	OddsAmerican   int        `json:"odds_american"`
-	OddsDecimal    float64    `json:"odds_decimal"`
-	ImpliedProb    float64    `json:"implied_probability,omitempty"`
-	IsLive         bool       `json:"is_live,omitempty"`
-	IsOpening      bool       `json:"is_opening,omitempty"`
-	IsClosing      bool       `json:"is_closing,omitempty"`
-	CapturedAt     time.Time  `json:"timestamp"`
-	Source         string     `json:"source,omitempty"`
+	ID               string     `json:"id"`
+	GameExternalID   string     `json:"game_id"`
+	SportsbookID     string     `json:"sportsbook_id"`
+	SportsbookKey    string     `json:"sportsbook_key,omitempty"`
+	League           League     `json:"league,omitempty"`
+	MarketType       MarketType `json:"market_type"`
+	Selection        string     `json:"selection"`
+	Side             string     `json:"side,omitempty"`
+	PlayerExternalID string     `json:"player_id,omitempty"`
+	StatType         string     `json:"stat_type,omitempty"`
+	PropType         string     `json:"prop_type,omitempty"`
+	LineValue        *float64   `json:"line_value"`
+	OddsAmerican     int        `json:"odds_american"`
+	OddsDecimal      float64    `json:"odds_decimal"`
+	ImpliedProb      float64    `json:"implied_probability,omitempty"`
+	IsLive           bool       `json:"is_live,omitempty"`
+	IsOpening        bool       `json:"is_opening,omitempty"`
+	IsClosing        bool       `json:"is_closing,omitempty"`
+	CapturedAt       time.Time  `json:"timestamp"`
+	Source           string     `json:"source,omitempty"`
 }
 
 type ClosingLine struct {
-	ID             string     `json:"id"`
-	GameExternalID string     `json:"game_id"`
-	SportsbookID   string     `json:"sportsbook_id"`
-	SportsbookKey  string     `json:"sportsbook_key,omitempty"`
-	League         League     `json:"league,omitempty"`
-	MarketType     MarketType `json:"market_type"`
-	Selection      string     `json:"selection"`
-	LineValue      *float64   `json:"line_value"`
-	OddsAmerican   int        `json:"odds_american"`
-	OddsDecimal    float64    `json:"odds_decimal"`
-	CapturedAt     time.Time  `json:"captured_at"`
-	CreatedAt      time.Time  `json:"created_at,omitzero"`
+	ID               string     `json:"id"`
+	GameExternalID   string     `json:"game_id"`
+	SportsbookID     string     `json:"sportsbook_id"`
+	SportsbookKey    string     `json:"sportsbook_key,omitempty"`
+	League           League     `json:"league,omitempty"`
+	MarketType       MarketType `json:"market_type"`
+	Selection        string     `json:"selection"`
+	PlayerExternalID string     `json:"player_id,omitempty"`
+	StatType         string     `json:"stat_type,omitempty"`
+	PropType         string     `json:"prop_type,omitempty"`
+	LineValue        *float64   `json:"line_value"`
+	OddsAmerican     int        `json:"odds_american"`
+	OddsDecimal      float64    `json:"odds_decimal"`
+	CapturedAt       time.Time  `json:"captured_at"`
+	CreatedAt        time.Time  `json:"created_at,omitzero"`
 }
 
 type BestLine struct {
 	MarketType       MarketType `json:"market_type"`
 	Selection        string     `json:"selection"`
 	Side             string     `json:"side,omitempty"`
+	PlayerExternalID string     `json:"player_id,omitempty"`
+	StatType         string     `json:"stat_type,omitempty"`
+	PropType         string     `json:"prop_type,omitempty"`
 	LineValue        *float64   `json:"line_value"`
 	BestOddsAmerican int        `json:"best_odds_american"`
 	BestOddsDecimal  float64    `json:"best_odds_decimal"`

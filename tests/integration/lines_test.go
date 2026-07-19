@@ -11,7 +11,9 @@ import (
 
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/adapter/oddsapi"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/cache"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/model"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/pubsub"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/repository"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/repository/postgres"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/server"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/service"
@@ -391,6 +393,102 @@ func TestIngestionAndReadAPI(t *testing.T) {
 		}
 		if count != 6 {
 			t.Errorf("closing lines after second sweep = %d, want 6", count)
+		}
+	})
+
+	t.Run("prop columns round-trip through snapshots and closing lines", func(t *testing.T) {
+		// ADR-029: PLAYER_PROP snapshots persist player_external_id,
+		// stat_type, and prop_type; closing-line capture carries them over.
+		var sportsbookID string
+		if err := testPool.QueryRow(ctx,
+			`SELECT id FROM lines.sportsbooks WHERE key = 'draftkings'`).Scan(&sportsbookID); err != nil {
+			t.Fatalf("lookup sportsbook: %v", err)
+		}
+
+		capturedAt := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Second)
+		snapshots := []model.LineSnapshot{
+			{
+				GameExternalID:   "prop-game-1",
+				SportsbookID:     sportsbookID,
+				League:           model.LeagueEPL,
+				MarketType:       model.MarketPlayerProp,
+				Selection:        "Erling Haaland Over 2.5 Shots",
+				PlayerExternalID: "player-haaland",
+				StatType:         "SHOTS",
+				PropType:         "OVER_UNDER",
+				LineValue:        fptr(2.5),
+				OddsAmerican:     -110,
+				OddsDecimal:      1.91,
+				CapturedAt:       capturedAt,
+				Source:           "the_odds_api",
+			},
+			{
+				GameExternalID: "prop-game-1",
+				SportsbookID:   sportsbookID,
+				League:         model.LeagueEPL,
+				MarketType:     model.MarketMoneyline,
+				Selection:      "Manchester City",
+				OddsAmerican:   -150,
+				OddsDecimal:    1.67,
+				CapturedAt:     capturedAt,
+				Source:         "the_odds_api",
+			},
+		}
+
+		inserted, err := lineRepo.InsertLineSnapshots(ctx, snapshots)
+		if err != nil {
+			t.Fatalf("insert prop snapshots: %v", err)
+		}
+		if inserted != 2 {
+			t.Fatalf("inserted = %d, want 2", inserted)
+		}
+
+		lines, _, err := lineRepo.GetGameLines(ctx, "prop-game-1", repository.CurrentLineFilters{})
+		if err != nil {
+			t.Fatalf("read prop game lines: %v", err)
+		}
+		if len(lines) != 2 {
+			t.Fatalf("len(lines) = %d, want 2", len(lines))
+		}
+		byMarket := make(map[model.MarketType]model.LineSnapshot)
+		for _, l := range lines {
+			byMarket[l.MarketType] = l
+		}
+
+		prop := byMarket[model.MarketPlayerProp]
+		if prop.PlayerExternalID != "player-haaland" || prop.StatType != "SHOTS" || prop.PropType != "OVER_UNDER" {
+			t.Errorf("prop columns = %q/%q/%q, want player-haaland/SHOTS/OVER_UNDER",
+				prop.PlayerExternalID, prop.StatType, prop.PropType)
+		}
+
+		// Non-prop rows persist NULLs, scanned back as empty strings.
+		ml := byMarket[model.MarketMoneyline]
+		if ml.PlayerExternalID != "" || ml.StatType != "" || ml.PropType != "" {
+			t.Errorf("moneyline prop columns = %q/%q/%q, want empty",
+				ml.PlayerExternalID, ml.StatType, ml.PropType)
+		}
+
+		captured, err := lineRepo.CaptureClosingLines(ctx, "prop-game-1", time.Now().UTC())
+		if err != nil {
+			t.Fatalf("capture closing lines: %v", err)
+		}
+		if captured != 2 {
+			t.Fatalf("closing lines captured = %d, want 2", captured)
+		}
+
+		closingLines, err := lineRepo.GetClosingLines(ctx, "prop-game-1", repository.ClosingLineFilters{
+			MarketType: "PLAYER_PROP",
+		})
+		if err != nil {
+			t.Fatalf("read closing lines: %v", err)
+		}
+		if len(closingLines) != 1 {
+			t.Fatalf("len(closing) = %d, want 1", len(closingLines))
+		}
+		cl := closingLines[0]
+		if cl.PlayerExternalID != "player-haaland" || cl.StatType != "SHOTS" || cl.PropType != "OVER_UNDER" {
+			t.Errorf("closing prop columns = %q/%q/%q, want player-haaland/SHOTS/OVER_UNDER",
+				cl.PlayerExternalID, cl.StatType, cl.PropType)
 		}
 	})
 

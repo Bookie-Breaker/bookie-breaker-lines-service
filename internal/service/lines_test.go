@@ -242,6 +242,24 @@ func TestDeriveSide(t *testing.T) {
 		{model.MarketMoneyline, "Unknown Team", ""},
 		{model.MarketMoneyline, "Draw", "DRAW"},
 		{model.MarketSpread, "Draw", ""},
+		// Prop markets: side derives from outcome keywords in the selection.
+		{model.MarketPlayerProp, "Erling Haaland Over 2.5 Shots", "OVER"},
+		{model.MarketPlayerProp, "Erling Haaland Under 2.5 Shots", "UNDER"},
+		{model.MarketPlayerProp, "Erling Haaland Anytime Goalscorer Yes", "YES"},
+		{model.MarketPlayerProp, "Erling Haaland Anytime Goalscorer No", "NO"},
+		{model.MarketPlayerProp, "Over 2.5 Shots", "OVER"},
+		{model.MarketPlayerProp, "Under 2.5 Shots", "UNDER"},
+		{model.MarketPlayerProp, "Erling Haaland Over", "OVER"},
+		{model.MarketPlayerProp, "Erling Haaland Under", "UNDER"},
+		// "Anytime" without a trailing Yes/No does not imply a side.
+		{model.MarketPlayerProp, "Erling Haaland Anytime Goalscorer", ""},
+		// Substrings inside words must not match ("Overton", "Norman").
+		{model.MarketPlayerProp, "Jed Overton 2.5 Shots", ""},
+		{model.MarketPlayerProp, "Greg Norman To Score", ""},
+		{model.MarketTeamProp, "Manchester City Over 10.5 Corners", "OVER"},
+		{model.MarketGameProp, "Both Teams To Score Yes", "YES"},
+		{model.MarketGameProp, "Both Teams To Score No", "NO"},
+		{model.MarketPlayerProp, "Erling Haaland First Goalscorer", ""},
 	}
 
 	for _, tt := range tests {
