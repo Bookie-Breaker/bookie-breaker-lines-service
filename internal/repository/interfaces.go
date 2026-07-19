@@ -13,6 +13,7 @@ type CurrentLineFilters struct {
 	Sportsbooks []string
 	MarketTypes []string
 	Date        string
+	IsLive      *bool
 	Limit       int
 	Cursor      string
 }

@@ -29,12 +29,17 @@ func NewLinesHandler(query *service.LineQueryService) *LinesHandler {
 
 // GetCurrentLines handles GET /api/v1/lines/current.
 func (h *LinesHandler) GetCurrentLines(c echo.Context) error {
+	isLive, err := parseOptionalBool(c.QueryParam("is_live"))
+	if err != nil {
+		return ErrorResponse(c, http.StatusBadRequest, "INVALID_PARAMETER", "is_live must be a boolean")
+	}
 	filters := repository.CurrentLineFilters{
 		Leagues:     splitCSV(c.QueryParam("league")),
 		GameIDs:     splitCSV(c.QueryParam("game_id")),
 		Sportsbooks: splitCSV(c.QueryParam("sportsbook")),
 		MarketTypes: splitCSV(c.QueryParam("market_type")),
 		Date:        c.QueryParam("date"),
+		IsLive:      isLive,
 		Limit:       parseLimit(c),
 		Cursor:      c.QueryParam("cursor"),
 	}
@@ -48,9 +53,14 @@ func (h *LinesHandler) GetCurrentLines(c echo.Context) error {
 
 // GetGameLines handles GET /api/v1/lines/game/{game_id}.
 func (h *LinesHandler) GetGameLines(c echo.Context) error {
+	isLive, err := parseOptionalBool(c.QueryParam("is_live"))
+	if err != nil {
+		return ErrorResponse(c, http.StatusBadRequest, "INVALID_PARAMETER", "is_live must be a boolean")
+	}
 	filters := repository.CurrentLineFilters{
 		Sportsbooks: splitCSV(c.QueryParam("sportsbook")),
 		MarketTypes: splitCSV(c.QueryParam("market_type")),
+		IsLive:      isLive,
 		Limit:       parseLimit(c),
 		Cursor:      c.QueryParam("cursor"),
 	}

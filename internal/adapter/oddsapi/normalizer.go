@@ -93,7 +93,7 @@ func Normalize(events OddsResponse, sportsbookIDs map[string]string, capturedAt 
 				}
 
 				for _, outcome := range market.Outcomes {
-					selection := buildSelection(outcome, marketType, event.HomeTeam)
+					selection := BuildSelection(outcome.Name, outcome.Point, marketType)
 					american := DecimalToAmerican(outcome.Price)
 
 					snap := model.LineSnapshot{
@@ -124,29 +124,31 @@ func Normalize(events OddsResponse, sportsbookIDs map[string]string, capturedAt 
 	}
 }
 
-// buildSelection creates human-readable selection strings.
-func buildSelection(outcome Outcome, marketType model.MarketType, homeTeam string) string {
+// BuildSelection creates human-readable selection strings. Shared by the
+// Odds API and SharpAPI normalizers so live and pre-game snapshots dedup
+// against the same line keys (including three-way Draw selections).
+func BuildSelection(name string, point *float64, marketType model.MarketType) string {
 	switch marketType {
 	case model.MarketSpread:
-		if outcome.Point != nil {
+		if point != nil {
 			sign := "+"
-			if *outcome.Point < 0 {
+			if *point < 0 {
 				sign = ""
 			}
-			return outcome.Name + " " + sign + formatFloat(*outcome.Point)
+			return name + " " + sign + formatFloat(*point)
 		}
-		return outcome.Name
+		return name
 	case model.MarketTotal:
-		if outcome.Point != nil {
-			if outcome.Name == "Over" || outcome.Name == "Under" {
-				return outcome.Name + " " + formatFloat(*outcome.Point)
+		if point != nil {
+			if name == "Over" || name == "Under" {
+				return name + " " + formatFloat(*point)
 			}
 		}
-		return outcome.Name
+		return name
 	case model.MarketMoneyline:
-		return outcome.Name
+		return name
 	default:
-		return outcome.Name
+		return name
 	}
 }
 

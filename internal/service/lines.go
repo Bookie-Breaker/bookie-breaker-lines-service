@@ -66,7 +66,7 @@ func (s *LineQueryService) GameLines(ctx context.Context, gameID string, filters
 		return nil, false, "", err
 	}
 
-	cacheable := side == "" && filters.Cursor == "" && len(filters.MarketTypes) == 0 && len(filters.Sportsbooks) == 0
+	cacheable := side == "" && filters.Cursor == "" && len(filters.MarketTypes) == 0 && len(filters.Sportsbooks) == 0 && filters.IsLive == nil
 
 	if cacheable {
 		cached, cacheErr := s.lineCache.GetCurrentLines(ctx, gameID)
