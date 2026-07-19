@@ -27,9 +27,11 @@ func (r *LineRepo) InsertLineSnapshots(ctx context.Context, snapshots []model.Li
 
 	// Conflict target lists the columns of the uq_line_snapshots_composite
 	// unique index; ON CONFLICT ON CONSTRAINT does not work with indexes.
+	// Prop columns (ADR-029) are stored as NULL for non-prop markets; NULLIF
+	// maps the model's empty-string zero value onto NULL.
 	query := `INSERT INTO lines.line_snapshots
-		(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, is_live, captured_at, source)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, is_live, captured_at, source, player_external_id, stat_type, prop_type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''))
 		ON CONFLICT (game_external_id, sportsbook_id, market_type, selection, captured_at) DO NOTHING`
 
 	batch := &pgx.Batch{}
@@ -37,6 +39,7 @@ func (r *LineRepo) InsertLineSnapshots(ctx context.Context, snapshots []model.Li
 		batch.Queue(query,
 			s.GameExternalID, s.SportsbookID, s.League, s.MarketType, s.Selection,
 			s.LineValue, s.OddsAmerican, s.OddsDecimal, s.IsLive, s.CapturedAt, s.Source,
+			s.PlayerExternalID, s.StatType, s.PropType,
 		)
 	}
 
@@ -57,7 +60,9 @@ func (r *LineRepo) InsertLineSnapshots(ctx context.Context, snapshots []model.Li
 
 // GetLatestLineValues returns the value-bearing fields of the most recent
 // snapshot per (game, sportsbook, market, selection) for the given games,
-// used by ingestion to skip persisting unchanged lines.
+// used by ingestion to skip persisting unchanged lines. Prop columns
+// (ADR-029) are intentionally excluded: the selection text already encodes
+// the player, outcome, and stat, so it disambiguates prop line identity.
 func (r *LineRepo) GetLatestLineValues(ctx context.Context, gameIDs []string) (map[repository.LineKey]repository.LineValues, error) {
 	latest := make(map[repository.LineKey]repository.LineValues)
 	if len(gameIDs) == 0 {
@@ -96,9 +101,9 @@ func (r *LineRepo) GetLatestLineValues(ctx context.Context, gameIDs []string) (m
 func (r *LineRepo) CaptureClosingLines(ctx context.Context, gameExternalID string, commenceTime time.Time) (int, error) {
 	ct, err := r.db.Exec(ctx,
 		`INSERT INTO lines.closing_lines
-			(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at)
+			(game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at, player_external_id, stat_type, prop_type)
 		SELECT DISTINCT ON (game_external_id, sportsbook_id, market_type, selection)
-			game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at
+			game_external_id, sportsbook_id, league, market_type, selection, line_value, odds_american, odds_decimal, captured_at, player_external_id, stat_type, prop_type
 		FROM lines.line_snapshots
 		WHERE game_external_id = $1 AND captured_at <= $2
 		ORDER BY game_external_id, sportsbook_id, market_type, selection, captured_at DESC
@@ -106,7 +111,10 @@ func (r *LineRepo) CaptureClosingLines(ctx context.Context, gameExternalID strin
 			line_value = EXCLUDED.line_value,
 			odds_american = EXCLUDED.odds_american,
 			odds_decimal = EXCLUDED.odds_decimal,
-			captured_at = EXCLUDED.captured_at`,
+			captured_at = EXCLUDED.captured_at,
+			player_external_id = EXCLUDED.player_external_id,
+			stat_type = EXCLUDED.stat_type,
+			prop_type = EXCLUDED.prop_type`,
 		gameExternalID, commenceTime,
 	)
 	if err != nil {
@@ -130,7 +138,8 @@ func (r *LineRepo) queryLines(ctx context.Context, _ string, filters repository.
 	// declaration order, not lexicographic order).
 	query := `SELECT DISTINCT ON (ls.game_external_id, ls.sportsbook_id::text, ls.market_type::text, ls.selection)
 		ls.id, ls.game_external_id, ls.sportsbook_id, sb.key, ls.league, ls.market_type,
-		ls.selection, ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
+		ls.selection, COALESCE(ls.player_external_id, ''), COALESCE(ls.stat_type, ''), COALESCE(ls.prop_type, ''),
+		ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
 		FROM lines.line_snapshots ls
 		JOIN lines.sportsbooks sb ON sb.id = ls.sportsbook_id
 		WHERE 1=1`
@@ -201,7 +210,8 @@ func (r *LineRepo) queryLines(ctx context.Context, _ string, filters repository.
 		var l model.LineSnapshot
 		if err := rows.Scan(
 			&l.ID, &l.GameExternalID, &l.SportsbookID, &l.SportsbookKey, &l.League, &l.MarketType,
-			&l.Selection, &l.LineValue, &l.OddsAmerican, &l.OddsDecimal, &l.IsLive, &l.CapturedAt, &l.Source,
+			&l.Selection, &l.PlayerExternalID, &l.StatType, &l.PropType,
+			&l.LineValue, &l.OddsAmerican, &l.OddsDecimal, &l.IsLive, &l.CapturedAt, &l.Source,
 		); err != nil {
 			return nil, false, fmt.Errorf("scan line: %w", err)
 		}
@@ -220,13 +230,15 @@ func (r *LineRepo) GetLineByID(ctx context.Context, id string) (*model.LineSnaps
 	var l model.LineSnapshot
 	err := r.db.QueryRow(ctx,
 		`SELECT ls.id, ls.game_external_id, ls.sportsbook_id, sb.key, ls.league, ls.market_type,
-			ls.selection, ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
+			ls.selection, COALESCE(ls.player_external_id, ''), COALESCE(ls.stat_type, ''), COALESCE(ls.prop_type, ''),
+			ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
 		FROM lines.line_snapshots ls
 		JOIN lines.sportsbooks sb ON sb.id = ls.sportsbook_id
 		WHERE ls.id = $1`, id,
 	).Scan(
 		&l.ID, &l.GameExternalID, &l.SportsbookID, &l.SportsbookKey, &l.League, &l.MarketType,
-		&l.Selection, &l.LineValue, &l.OddsAmerican, &l.OddsDecimal, &l.IsLive, &l.CapturedAt, &l.Source,
+		&l.Selection, &l.PlayerExternalID, &l.StatType, &l.PropType,
+		&l.LineValue, &l.OddsAmerican, &l.OddsDecimal, &l.IsLive, &l.CapturedAt, &l.Source,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get line by id %q: %w", id, err)
@@ -236,7 +248,8 @@ func (r *LineRepo) GetLineByID(ctx context.Context, id string) (*model.LineSnaps
 
 func (r *LineRepo) GetLineMovement(ctx context.Context, gameID string, filters repository.MovementFilters) ([]model.LineSnapshot, error) {
 	query := `SELECT ls.id, ls.game_external_id, ls.sportsbook_id, sb.key, ls.league, ls.market_type,
-		ls.selection, ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
+		ls.selection, COALESCE(ls.player_external_id, ''), COALESCE(ls.stat_type, ''), COALESCE(ls.prop_type, ''),
+		ls.line_value, ls.odds_american, ls.odds_decimal, ls.is_live, ls.captured_at, ls.source
 		FROM lines.line_snapshots ls
 		JOIN lines.sportsbooks sb ON sb.id = ls.sportsbook_id
 		WHERE ls.game_external_id = $1`
@@ -272,7 +285,8 @@ func (r *LineRepo) GetLineMovement(ctx context.Context, gameID string, filters r
 		var l model.LineSnapshot
 		if err := rows.Scan(
 			&l.ID, &l.GameExternalID, &l.SportsbookID, &l.SportsbookKey, &l.League, &l.MarketType,
-			&l.Selection, &l.LineValue, &l.OddsAmerican, &l.OddsDecimal, &l.IsLive, &l.CapturedAt, &l.Source,
+			&l.Selection, &l.PlayerExternalID, &l.StatType, &l.PropType,
+			&l.LineValue, &l.OddsAmerican, &l.OddsDecimal, &l.IsLive, &l.CapturedAt, &l.Source,
 		); err != nil {
 			return nil, fmt.Errorf("scan movement line: %w", err)
 		}
@@ -284,7 +298,8 @@ func (r *LineRepo) GetLineMovement(ctx context.Context, gameID string, filters r
 
 func (r *LineRepo) GetClosingLines(ctx context.Context, gameID string, filters repository.ClosingLineFilters) ([]model.ClosingLine, error) {
 	query := `SELECT cl.id, cl.game_external_id, cl.sportsbook_id, sb.key, cl.league, cl.market_type,
-		cl.selection, cl.line_value, cl.odds_american, cl.odds_decimal, cl.captured_at, cl.created_at
+		cl.selection, COALESCE(cl.player_external_id, ''), COALESCE(cl.stat_type, ''), COALESCE(cl.prop_type, ''),
+		cl.line_value, cl.odds_american, cl.odds_decimal, cl.captured_at, cl.created_at
 		FROM lines.closing_lines cl
 		JOIN lines.sportsbooks sb ON sb.id = cl.sportsbook_id
 		WHERE cl.game_external_id = $1`
@@ -315,7 +330,8 @@ func (r *LineRepo) GetClosingLines(ctx context.Context, gameID string, filters r
 		var cl model.ClosingLine
 		if err := rows.Scan(
 			&cl.ID, &cl.GameExternalID, &cl.SportsbookID, &cl.SportsbookKey, &cl.League, &cl.MarketType,
-			&cl.Selection, &cl.LineValue, &cl.OddsAmerican, &cl.OddsDecimal, &cl.CapturedAt, &cl.CreatedAt,
+			&cl.Selection, &cl.PlayerExternalID, &cl.StatType, &cl.PropType,
+			&cl.LineValue, &cl.OddsAmerican, &cl.OddsDecimal, &cl.CapturedAt, &cl.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan closing line: %w", err)
 		}

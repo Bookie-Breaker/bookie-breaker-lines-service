@@ -394,7 +394,8 @@ func (s *LineQueryService) sportsbookNames(ctx context.Context) (map[string]stri
 
 // deriveSide maps a selection onto the contract's side enum. Totals derive
 // from the selection prefix; spreads and moneylines compare the selection's
-// team against the game's home/away teams.
+// team against the game's home/away teams; props derive from outcome
+// keywords embedded in the selection text.
 func deriveSide(snap model.LineSnapshot, game *model.Game) string {
 	switch snap.MarketType {
 	case model.MarketTotal:
@@ -418,6 +419,27 @@ func deriveSide(snap model.LineSnapshot, game *model.Game) string {
 			return "HOME"
 		case strings.HasPrefix(snap.Selection, game.AwayTeam):
 			return "AWAY"
+		}
+		return ""
+	case model.MarketPlayerProp, model.MarketTeamProp, model.MarketGameProp:
+		// Side by outcome keyword in the selection (built by the prop
+		// normalizer; stored rows round-trip through here). Over/Under match
+		// as whole tokens ("Erling Haaland Over 2.5 Shots"); Yes/No only as
+		// trailing tokens ("... Anytime Goalscorer Yes"). "Anytime" alone
+		// does not imply YES.
+		switch {
+		case strings.Contains(snap.Selection, " Over "),
+			strings.HasSuffix(snap.Selection, " Over"),
+			strings.HasPrefix(snap.Selection, "Over "):
+			return "OVER"
+		case strings.Contains(snap.Selection, " Under "),
+			strings.HasSuffix(snap.Selection, " Under"),
+			strings.HasPrefix(snap.Selection, "Under "):
+			return "UNDER"
+		case strings.HasSuffix(snap.Selection, " Yes"):
+			return "YES"
+		case strings.HasSuffix(snap.Selection, " No"):
+			return "NO"
 		}
 		return ""
 	default:
