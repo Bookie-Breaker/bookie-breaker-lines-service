@@ -31,11 +31,24 @@ type Market struct {
 	Outcomes   []Outcome `json:"outcomes"`
 }
 
-// Outcome represents a single selection within a market.
+// Outcome represents a single selection within a market. Description carries
+// the player name on player-prop markets (empty for game-level markets).
 type Outcome struct {
-	Name  string   `json:"name"`
-	Price float64  `json:"price"` // decimal odds
-	Point *float64 `json:"point,omitempty"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Price       float64  `json:"price"` // decimal odds
+	Point       *float64 `json:"point,omitempty"`
+}
+
+// EventStub is a single upcoming event from GET /v4/sports/{sport}/events.
+// It carries no odds; use GetEventOdds for the per-event prop markets.
+type EventStub struct {
+	ID           string    `json:"id"`
+	SportKey     string    `json:"sport_key"`
+	SportTitle   string    `json:"sport_title"`
+	CommenceTime time.Time `json:"commence_time"`
+	HomeTeam     string    `json:"home_team"`
+	AwayTeam     string    `json:"away_team"`
 }
 
 // SportResponse is a single sport from GET /v4/sports.
