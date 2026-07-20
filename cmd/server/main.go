@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/adapter/oddsapi"
+	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/adapter/sharpapi"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/cache"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/config"
 	"github.com/Bookie-Breaker/bookie-breaker-lines-service/internal/database"
@@ -66,6 +67,14 @@ func main() {
 		go scheduler.Start(ctx)
 	} else {
 		slog.Warn("ODDS_API_KEY not set; ingestion scheduler disabled, read API only")
+	}
+
+	if cfg.SharpAPIURL != "" {
+		sharpClient := sharpapi.NewClient(cfg.SharpAPIURL, cfg.SharpAPIKey, nil)
+		liveConsumer := service.NewLiveConsumer(sharpClient, ingestion, gameRepo, sbRepo, cfg.SharpAPIFailures)
+		go liveConsumer.Run(ctx)
+	} else {
+		slog.Info("SHARP_API_URL not set; live line consumer disabled")
 	}
 
 	e := server.New(server.Deps{

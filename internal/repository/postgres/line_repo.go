@@ -168,6 +168,11 @@ func (r *LineRepo) queryLines(ctx context.Context, _ string, filters repository.
 		args = append(args, filters.MarketTypes)
 		argIdx++
 	}
+	if filters.IsLive != nil {
+		conditions = append(conditions, fmt.Sprintf(`ls.is_live = $%d`, argIdx))
+		args = append(args, *filters.IsLive)
+		argIdx++
+	}
 	if filters.Date != "" {
 		conditions = append(conditions, fmt.Sprintf(
 			`ls.game_external_id IN (SELECT game_external_id FROM lines.games WHERE commence_time::date = $%d::date)`, argIdx))

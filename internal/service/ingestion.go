@@ -38,8 +38,8 @@ type IngestionService struct {
 	lineCache *cache.LineCache
 	publisher *pubsub.Publisher
 
-	// mu serializes ingestion cycles so a manual trigger and a scheduler
-	// tick cannot interleave their dedup reads and inserts.
+	// mu serializes persistSnapshots so a manual trigger, a scheduler tick,
+	// and the live consumer cannot interleave their dedup reads and inserts.
 	mu sync.Mutex
 }
 
@@ -66,9 +66,6 @@ func NewIngestionService(
 
 // Ingest fetches and processes lines for a sport from The Odds API.
 func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*IngestionResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	ctx, span := ingestionTracer.Start(ctx, "ingestion.Ingest")
 	defer span.End()
 	span.SetAttributes(attribute.String("sport_key", sportKey))
@@ -127,16 +124,12 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 		}, nil
 	}
 
-	// Skip snapshots whose values match the latest persisted row
-	allGameIDs := uniqueGameIDs(normalized.Snapshots)
-	latest, err := s.lineRepo.GetLatestLineValues(ctx, allGameIDs)
+	inserted, skipped, err := s.persistSnapshots(ctx, normalized.Snapshots, sbMap)
 	if err != nil {
-		return nil, fmt.Errorf("fetch latest line values: %w", err)
+		return nil, err
 	}
-	changed := FilterChanged(latest, normalized.Snapshots)
-	skipped := len(normalized.Snapshots) - len(changed)
 
-	if len(changed) == 0 {
+	if inserted == 0 {
 		slog.Info("no line changes detected", "sport", sportKey, "lines_skipped", skipped)
 		return &IngestionResult{
 			League:       sportKey,
@@ -144,36 +137,6 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 			LinesSkipped: skipped,
 			DurationMs:   time.Since(start).Milliseconds(),
 		}, nil
-	}
-
-	// Persist
-	inserted, err := s.lineRepo.InsertLineSnapshots(ctx, changed)
-	if err != nil {
-		return nil, fmt.Errorf("insert line snapshots: %w", err)
-	}
-
-	// Invalidate cache for affected games
-	gameIDs := uniqueGameIDs(changed)
-	for _, gid := range gameIDs {
-		if cacheErr := s.lineCache.InvalidateGame(ctx, gid); cacheErr != nil {
-			slog.Warn("failed to invalidate cache", "game_id", gid, "error", cacheErr)
-		}
-	}
-
-	// Publish event
-	league := ""
-	if len(changed) > 0 {
-		league = string(changed[0].League)
-	}
-	if pubErr := s.publisher.PublishLinesUpdated(ctx, pubsub.LinesUpdatedEvent{
-		League:             league,
-		GameIDs:            gameIDs,
-		MarketTypes:        uniqueMarketTypes(changed),
-		SportsbooksUpdated: uniqueSportsbooks(changed, sbMap),
-		ChangeCount:        inserted,
-		Source:             "the_odds_api",
-	}); pubErr != nil {
-		slog.Warn("failed to publish lines.updated event", "error", pubErr)
 	}
 
 	duration := time.Since(start)
@@ -198,6 +161,60 @@ func (s *IngestionService) Ingest(ctx context.Context, sportKey string) (*Ingest
 		LinesSkipped:  skipped,
 		DurationMs:    duration.Milliseconds(),
 	}, nil
+}
+
+// persistSnapshots is the single write path for line snapshots: it dedups
+// against the latest persisted values, inserts the changed rows, invalidates
+// the per-game cache, and publishes a lines.updated event whose is_live and
+// source fields are taken from the snapshots themselves. Both REST polling
+// ingestion and the SharpAPI live consumer go through here; the mutex keeps
+// their dedup reads and inserts from interleaving.
+func (s *IngestionService) persistSnapshots(ctx context.Context, snapshots []model.LineSnapshot, sbMap map[string]string) (inserted, skipped int, err error) {
+	if len(snapshots) == 0 {
+		return 0, 0, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	latest, err := s.lineRepo.GetLatestLineValues(ctx, uniqueGameIDs(snapshots))
+	if err != nil {
+		return 0, 0, fmt.Errorf("fetch latest line values: %w", err)
+	}
+	changed := FilterChanged(latest, snapshots)
+	skipped = len(snapshots) - len(changed)
+
+	if len(changed) == 0 {
+		return 0, skipped, nil
+	}
+
+	inserted, err = s.lineRepo.InsertLineSnapshots(ctx, changed)
+	if err != nil {
+		return 0, skipped, fmt.Errorf("insert line snapshots: %w", err)
+	}
+
+	// Invalidate cache for affected games
+	gameIDs := uniqueGameIDs(changed)
+	for _, gid := range gameIDs {
+		if cacheErr := s.lineCache.InvalidateGame(ctx, gid); cacheErr != nil {
+			slog.Warn("failed to invalidate cache", "game_id", gid, "error", cacheErr)
+		}
+	}
+
+	first := changed[0]
+	if pubErr := s.publisher.PublishLinesUpdated(ctx, pubsub.LinesUpdatedEvent{
+		League:             string(first.League),
+		GameIDs:            gameIDs,
+		MarketTypes:        uniqueMarketTypes(changed),
+		SportsbooksUpdated: uniqueSportsbooks(changed, sbMap),
+		ChangeCount:        inserted,
+		IsLive:             first.IsLive,
+		Source:             first.Source,
+	}); pubErr != nil {
+		slog.Warn("failed to publish lines.updated event", "error", pubErr)
+	}
+
+	return inserted, skipped, nil
 }
 
 func uniqueGameIDs(snapshots []model.LineSnapshot) []string {

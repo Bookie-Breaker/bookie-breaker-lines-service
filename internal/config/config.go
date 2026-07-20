@@ -14,6 +14,9 @@ type Config struct {
 	OddsAPIKey           string
 	OddsAPIPollInterval  time.Duration
 	OddsAPISports        []string
+	SharpAPIURL          string
+	SharpAPIKey          string
+	SharpAPIFailures     int
 	OTELExporterEndpoint string
 	OTELServiceName      string
 	LogLevel             string
@@ -27,6 +30,9 @@ func Load() *Config {
 		OddsAPIKey:           getEnv("ODDS_API_KEY", ""),
 		OddsAPIPollInterval:  time.Duration(getEnvInt("ODDS_API_POLL_INTERVAL", 300)) * time.Second,
 		OddsAPISports:        getEnvList("ODDS_API_SPORTS", []string{"basketball_nba"}),
+		SharpAPIURL:          getEnv("SHARP_API_URL", ""),
+		SharpAPIKey:          getEnv("SHARP_API_KEY", ""),
+		SharpAPIFailures:     getEnvInt("SHARP_API_FAILURE_THRESHOLD", 5),
 		OTELExporterEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317"),
 		OTELServiceName:      getEnv("OTEL_SERVICE_NAME", "lines-service"),
 		LogLevel:             getEnv("LOG_LEVEL", "info"),

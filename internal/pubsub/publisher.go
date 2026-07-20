@@ -21,6 +21,7 @@ type LinesUpdatedEvent struct {
 	MarketTypes        []string `json:"market_types"`
 	SportsbooksUpdated []string `json:"sportsbooks_updated"`
 	ChangeCount        int      `json:"change_count"`
+	IsLive             bool     `json:"is_live,omitempty"`
 	Source             string   `json:"source"`
 }
 
