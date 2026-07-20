@@ -69,6 +69,18 @@ func main() {
 		slog.Warn("ODDS_API_KEY not set; ingestion scheduler disabled, read API only")
 	}
 
+	if ingestionEnabled && len(cfg.PropSports) > 0 {
+		propIngestion := service.NewPropIngestionService(
+			oddsClient, ingestion, gameRepo, sbRepo, rawRepo,
+			cfg.PropCommenceWindow, cfg.PropMaxEventsPerRun,
+		)
+		propScheduler := service.NewPropScheduler(propIngestion, cfg.PropPollInterval, cfg.PropSports)
+		go propScheduler.Start(ctx)
+	} else {
+		slog.Info("prop ingestion scheduler disabled",
+			"odds_api_key_set", ingestionEnabled, "prop_sports", cfg.PropSports)
+	}
+
 	if cfg.SharpAPIURL != "" {
 		sharpClient := sharpapi.NewClient(cfg.SharpAPIURL, cfg.SharpAPIKey, nil)
 		liveConsumer := service.NewLiveConsumer(sharpClient, ingestion, gameRepo, sbRepo, cfg.SharpAPIFailures)

@@ -14,6 +14,10 @@ type Config struct {
 	OddsAPIKey           string
 	OddsAPIPollInterval  time.Duration
 	OddsAPISports        []string
+	PropSports           []string
+	PropPollInterval     time.Duration
+	PropCommenceWindow   time.Duration
+	PropMaxEventsPerRun  int
 	SharpAPIURL          string
 	SharpAPIKey          string
 	SharpAPIFailures     int
@@ -30,6 +34,10 @@ func Load() *Config {
 		OddsAPIKey:           getEnv("ODDS_API_KEY", ""),
 		OddsAPIPollInterval:  time.Duration(getEnvInt("ODDS_API_POLL_INTERVAL", 300)) * time.Second,
 		OddsAPISports:        getEnvList("ODDS_API_SPORTS", []string{"basketball_nba"}),
+		PropSports:           getEnvListEmptyOK("PROP_SPORTS", []string{"soccer_fifa_world_cup", "soccer_epl", "baseball_mlb"}),
+		PropPollInterval:     time.Duration(getEnvInt("PROP_POLL_INTERVAL", 1800)) * time.Second,
+		PropCommenceWindow:   time.Duration(getEnvInt("PROP_COMMENCE_WINDOW_HOURS", 48)) * time.Hour,
+		PropMaxEventsPerRun:  getEnvInt("PROP_MAX_EVENTS_PER_CYCLE", 10),
 		SharpAPIURL:          getEnv("SHARP_API_URL", ""),
 		SharpAPIKey:          getEnv("SHARP_API_KEY", ""),
 		SharpAPIFailures:     getEnvInt("SHARP_API_FAILURE_THRESHOLD", 5),
@@ -53,6 +61,24 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// getEnvListEmptyOK is getEnvList except that a variable explicitly set to
+// an empty (or all-whitespace/comma) value yields an empty list instead of
+// the fallback — setting PROP_SPORTS="" disables prop ingestion entirely.
+func getEnvListEmptyOK(key string, fallback []string) []string {
+	v, set := os.LookupEnv(key)
+	if !set {
+		return fallback
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func getEnvList(key string, fallback []string) []string {
